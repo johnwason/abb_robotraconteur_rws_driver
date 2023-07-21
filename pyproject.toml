@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+
+[project]
+name = "abb_robotraconteur_rws_driver"
+version = "0.0.1"
+authors = [
+    {name = "John Wason", email = "wason@wasontech.com"}
+]
+description = "Robot Raconteur driver for ABB Robot Web Services (RWS)"
+requires-python = ">=3.6"
+license = {text = "Apache-2.0"}
+dependencies = [
+    'RobotRaconteur>=0.17',
+    'RobotRaconteurCompanion>=0.2.1',
+    'numpy',
+    'abb-robot-client',
+    'drekar-launch-process',
+    'robotraconteur-abstract-robot'
+]
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+abb_robotraconteur_rws_driver = ["*.robdef"]
+
+[project.optional-dependencies]
+test = [
+    "pytest"
+]
