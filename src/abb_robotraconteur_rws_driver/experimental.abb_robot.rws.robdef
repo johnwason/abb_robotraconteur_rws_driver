@@ -25,9 +25,11 @@ using com.robotraconteur.device.clock.DeviceTime
 
 
 enum TaskCycle
-    asis = 0,
-    forever = 1,
-    once = 2
+    unknown = 0,
+    asis = 1,
+    forever,
+    once,
+    oncedone
 end
 
 enum TaskExecutionState
@@ -64,7 +66,7 @@ struct TaskState
     field string name
     field string type
     field string taskstate
-    field TaskExecutionState exstate
+    field TaskExecutionState excstate
     field bool active
     field bool motiontask
 end
@@ -133,35 +135,33 @@ object ABBRWSRobot
     function void resetpp()
     function void activate_task(string task)
     function void deactivate_task(string task)
-
-    function string getf_ramdisk_path()
+    function TaskState{list} getf_tasks()
 
     function RAPIDExecutionState getf_execution_state()
     function RobotControllerState getf_controller_state()
-    function RobotOperationalMode getf_operational_mode()
+    function RobotOperationalMode getf_operation_mode()
 
-    function int32 getf_digital_io(string signal)
-    function void setf_digital_io(string signal, int32 value)
-    function int32 getf_digital_io2(string signal, string network, string unit)
-    function void setf_digital_io2(string signal, int32 value, string network, string unit)
+    function int32 getf_digital_io(string signal_name)
+    function void setf_digital_io(string signal_name, int32 value)
+    function int32 getf_digital_io2(string signal_name, string network, string unit)
+    function void setf_digital_io2(string signal_name, string network, string unit, int32 value)
 
-    function double getf_analog_io(string signal)
-    function void setf_analog_io(string signal, double value)
-    function double getf_analog_io2(string signal, string network, string unit)
-    function void setf_analog_io2(string signal, double value, string network, string unit)
+    function double getf_analog_io(string signal_name)
+    function void setf_analog_io(string signal_name, double value)
+    function double getf_analog_io2(string signal_name, string network, string unit)
+    function void setf_analog_io2(string signal_name, string network, string unit, double value)
 
     function string{list} getf_rapid_variables(string task)
     function string getf_rapid_variable(string var, string task)
     function void setf_rapid_variable(string var, string task, string value)
 
+    function string getf_ramdisk_path()
     function uint8[] read_file(string filename)
     function void upload_file(string filename, uint8[] data)
-    function void delet_file(string filename)
+    function void delete_file(string filename)
     function string{list} list_files(string path)
 
     function EventLogEntry{list} read_event_log()
-
-    function TaskState{list} getf_tasks()
 
     function JointTarget getf_jointtarget(string mechunit)
 

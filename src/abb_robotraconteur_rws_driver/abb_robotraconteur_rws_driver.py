@@ -13,6 +13,7 @@ from RobotRaconteurCompanion.Util.RobDef import register_service_types_from_reso
 from RobotRaconteurCompanion.Util.AttributesUtil import AttributesUtil
 from RobotRaconteurCompanion.Util.InfoFileLoader import InfoFileLoader
 import drekar_launch_process
+import general_robotics_toolbox as rox
 
 class ABBRWSRobotImpl(AbstractRobot):
     def __init__(self, robot_info, robot_url):
@@ -32,6 +33,29 @@ class ABBRWSRobotImpl(AbstractRobot):
         self._rws = None
         self._egm = None
         self._missed_egm = 0
+
+        self._abb_rws_const = self._node.GetConstants("experimental.abb_robot.rws")
+        self._task_cycle = self._abb_rws_const["TaskCycle"]
+        self._task_execution_state = self._abb_rws_const["TaskExecutionState"]
+
+        self._rapid_exec_state = self._node.GetStructureType("experimental.abb_robot.rws.RAPIDExecutionState")
+        self._task_state_type = self._node.GetStructureType("experimental.abb_robot.rws.TaskState")
+
+        self._event_log_entry_type = self._node.GetStructureType("experimental.abb_robot.rws.EventLogEntry")
+
+        self._jointtarget_type = self._node.GetStructureType("experimental.abb_robot.rws.JointTarget")
+        self._robtarget_type = self._node.GetStructureType("experimental.abb_robot.rws.RobTarget")
+
+        self._confdata_dtype = self._node.GetNamedArrayDType("experimental.abb_robot.rws.ConfData")
+
+    def RRServiceObjectInit(self, context, service_path):
+        super().RRServiceObjectInit(context, service_path)
+
+        self.egm_joint_command.InValueChanged += self._egm_joint_command_invalue_changed
+        self.egm_pose_command.InValueChanged += self._egm_pose_command_invalue_changed
+        self.egm_path_correction_command.InValueChanged += self._egm_correction_command_invalue_changed
+
+
 
     def _start_robot(self):
         self._egm = egm.EGM()
@@ -136,6 +160,279 @@ class ABBRWSRobotImpl(AbstractRobot):
             self._ready = False
 
         super()._run_timestep(now)
+
+    def getf_execution_state(self):
+        state = self._rws.get_execution_state()
+        ret = self._rapid_exec_state()
+        es = state.ctrlexecstate
+        if es == "running":
+            ret.ctrlexecstate = self._task_execution_state["running"]
+        elif es == "stopped":
+            ret.ctrlexecstate = self._task_execution_state["stopped"]
+        else:
+            ret.ctrlexecstate = self._task_execution_state["unknown"]
+
+        c = state.cycle
+        if c == "forever":
+            ret.cycle = self._task_cycle["forever"]
+        elif c == "asis":
+            ret.cycle = self._task_cycle["asis"]
+        elif c == "once":
+            ret.cycle = self._task_cycle["once"]
+        elif c == "oncedone":
+            ret.cycle = self._task_cycle["oncedone"]
+        else:
+            ret.cycle = self._task_cycle["unknown"]
+        return ret
+  
+    def getf_controller_state(self):
+        state = self._rws.get_controller_state()
+        if state == "init":
+            return self._robot_controller_state["init"]
+        elif state == "motoron":
+            return self._robot_controller_state["motor_on"]
+        elif state == "motoroff":
+            return self._robot_controller_state["motor_off"]
+        elif state == "guardstop":
+            return self._robot_controller_state["guard_stop"]
+        elif state == "emergencystop":
+            return self._robot_controller_state["emergency_stop"]
+        elif state == "emergystopreset":
+            return self._robot_controller_state["emergency_stop_reset"]
+        else:
+            return self._robot_controller_state["undefined"]
+    
+    def getf_operation_mode(self):
+        mode = self._rws.get_operation_mode()
+        if mode == "INIT":
+            return self._robot_operational_mode["init"]
+        elif mode == "MANR":
+            return self._robot_operational_mode["manual_reduced_speed"]
+        elif mode == "MANF":
+            return self._robot_operational_mode["manual_full_speed"]
+        elif mode == "AUTO":
+            return self._robot_operational_mode["auto"]
+        else:
+            return self._robot_operational_mode["undefined"]
+
+    
+    @property
+    def operational_mode(self):
+        return self.getf_operation_mode()
+    
+    @property
+    def controller_state(self):
+        return self.getf_controller_state()
+    
+    def start(self, cycle, tasks):
+        rws_cycle = "asis"
+        if cycle == self._task_cycle["forever"]:
+            rws_cycle = "forever"
+        elif cycle == self._task_cycle["asis"]:
+            rws_cycle = "asis"
+        elif cycle == self._task_cycle["once"]:
+            rws_cycle = "once"
+        elif cycle == self._task_cycle["oncedone"]:
+            rws_cycle = "oncedone"
+
+        self._rws.start(rws_cycle, tasks)
+
+    def stop(self):
+        self._rws.stop()
+
+    def resetpp(self):
+        self._rws.resetpp()
+
+    def activate_task(self, task):
+        self._rws.activate_task(task)
+
+    def deactivate_task(self, task):
+        self._rws.deactivate_task(task)
+
+    def getf_tasks(self):
+        rws_tasks = self._rws.get_tasks()
+        ret = []
+        for t in rws_tasks.values():
+            ret1 = self._task_state_type()
+            ret1.name = t.name
+            ret1.type = t.type_
+            ret1.taskstate = t.taskstate
+            ret1.excstate = self._task_execution_state["unknown"]
+            if t.taskstate == "running":
+                ret1.taskstate = self._task_execution_state["running"]
+            elif t.taskstate == "stopped":
+                ret1.taskstate = self._task_execution_state["stopped"]
+            ret1.active = t.active
+            ret1.motiontask = t.motiontask
+            ret.append(ret1)
+        return ret
+
+    def getf_digital_io(self, signal_name):
+        return self._rws.get_digital_io(signal_name)
+    
+    def setf_digital_io(self, signal_name, value):
+        self._rws.set_digital_io(signal_name, value)
+
+    def getf_digital_io2(self, signal_name, network, unit):
+        return self._rws.get_digital_io(signal_name, network, unit)
+    
+    def setf_digital_io2(self, signal_name, network, unit, value):
+        self._rws.set_digital_io(signal_name, value, network, unit)
+
+    def getf_analog_io(self, signal_name):
+        return self._rws.get_analog_io(signal_name)
+    
+    def setf_analog_io(self, signal_name, value):
+        self._rws.set_analog_io(signal_name, value)
+
+    def getf_analog_io2(self, signal_name, network, unit):
+        return self._rws.get_analog_io(signal_name, network, unit)
+    
+    def setf_analog_io2(self, signal_name, network, unit, value):
+        self._rws.set_analog_io(signal_name, value, network, unit)
+    
+    def getf_rapid_variables(self, task):
+        raise RR.NotImplementedException("Not implemented")
+    
+    def getf_rapid_variable(self, var, task):
+        return self._rws.get_rapid_variable(var, task)
+    
+    def setf_rapid_variable(self, var, task, value):
+        self._rws.set_rapid_variable(var, value, task)
+
+    def getf_ramdisk_path(self):
+        return self._rws.get_ramdisk_path()
+    
+    def read_file(self, filename):
+        return self._rws.read_file(filename)
+    
+    def upload_file(self, filename, data):
+        self._rws.upload_file(filename, data.tobytes())
+
+    def delete_file(self, filename):
+        self._rws.delete_file(filename)
+
+    def list_files(self, path):
+        return self._rws.list_files(path)
+    
+    def read_event_log(self):
+        ret = []
+        evts = self._rws.read_event_log()
+        for e in evts:
+            evt = self._event_log_entry_type()
+            evt.seqnum = e.seqnum
+            evt.msgtype = e.msgtype
+            # evt.tstamp = e.tstamp
+            evt.title = e.title
+            evt.desc = e.desc
+            evt.conseqs = e.conseqs
+            evt.causes = e.causes
+            evt.actions = e.actions
+            ret.append(evt)
+        return ret
+    
+    def _rws_jt_to_rr(self, jt):
+        ret = self._jointtarget_type()
+        ret.robax = jt.robax
+        ret.extax = jt.extax
+        return ret
+    
+    def _rr_jt_to_rws(self, jt):
+        ret = rws.JointTarget(jt.robax, jt.extax)
+        return ret
+
+    def getf_jointtarget(self, mechunit):
+        jt = self._rws.get_jointtarget(mechunit)
+        return self._rws_jt_to_rr(jt)
+    
+    def getf_robtarget(self, mechunit):
+        rt = self._rws.get_robtarget(mechunit)
+        ret = self._robtarget_type()
+        ret.pose = self._geometry_util.rox_transform_to_pose(rox.Transform(rox.q2R(rt.rot), rt.trans))
+        ret.robconf = self._node.ArrayToNamedArray(rt.robconf, self._confdata_dtype)
+        ret.extax = rt.extax
+
+        return ret
+    
+    def getf_robtarget2(self, mechunit, tool, wobj, coordinate):
+        rt = self._rws.get_robtarget(mechunit, tool, wobj, coordinate)
+        ret = self._robtarget_type()
+        ret.pose = self._geometry_util.rox_transform_to_pose(rox.Transform(rox.q2R(rt.rot), rt.trans))
+        ret.robconf = self._node.ArrayToNamedArray(rt.robconf, self._confdata_dtype)
+        ret.extax = rt.extax
+
+        return ret
+    
+    @property
+    def speed_ratio(self):
+        return self._rws.get_speedratio()/100.0
+
+    @speed_ratio.setter
+    def speed_ratio(self, value):
+        self._rws.set_speedratio(int(value*100))
+
+    def getf_rapid_variable_jointtarget(self, var, task):
+        jt = self._rws.get_rapid_variable_jointtarget(var, task)
+        return self._rws_jt_to_rr(jt)
+    
+    def setf_rapid_variable_jointtarget(self, var, task, value):
+        self._rws.set_rapid_variable_jointtarget(var, self._rr_jt_to_rws(value), task)
+
+    def getf_rapid_variable_jointtarget_array(self, var, task):
+        jt = self._rws.get_rapid_variable_jointtarget_array(var, task)
+        ret = []
+        for j in jt:
+            ret.append(self._rws_jt_to_rr(j))
+        return ret
+    
+    def setf_rapid_variable_jointtarget_array(self, var, task, value):
+        jt = []
+        for j in value:
+            jt.append(self._rr_jt_to_rws(j))
+        self._rws.set_rapid_variable_jointtarget_array(var, jt, task)
+
+    def getf_rapid_variable_num(self, var, task):
+        return self._rws.get_rapid_variable_num(var, task)
+    
+    def setf_rapid_variable_num(self, var, task, value):
+        self._rws.set_rapid_variable_num(var, value, task)
+
+    def getf_rapid_variable_num_array(self, var, task):
+        return self._rws.get_rapid_variable_num_array(var, task)
+    
+    def setf_rapid_variable_num_array(self, var, task, value):
+        self._rws.set_rapid_variable_num_array(var, value, task)
+
+    def request_rmmp(self, timeout):
+        self._rws.request_rmmp(timeout)
+
+    def poll_rmmp(self):
+        self._rws.poll_rmmp()
+
+    def _egm_joint_command_invalue_changed(self, value, ts, ep):
+        try:
+            if self._command_mode == 6:
+                self._egm.send_to_robot(value.joints)
+        except:
+            traceback.print_exc()
+
+    def _egm_pose_command_invalue_changed(self, value, ts, ep):
+        # print(f"egm_pose_command: {value.cartesian}")
+        try:
+            if self._command_mode == 6:
+                c = self._node.NamedArrayToArray(value.cartesian)[0]
+                self._egm.send_to_robot_cart(np.array(c[4:7])*1e3, c[0:4])
+        except:
+            traceback.print_exc()
+
+    def _egm_correction_command_invalue_changed(self, value, ts, ep):
+        # print(f"egm_correction_command: {value.pos}, {value.age}")
+        try:
+            if self._command_mode == 6:
+                p = self._node.NamedArrayToArray(value.pos)[0]*1e3
+                self._egm.send_to_robot_path_corr(p, value.age)
+        except:
+            traceback.print_exc()
 
 def main():
 
