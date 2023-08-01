@@ -1,5 +1,7 @@
 import RobotRaconteur as RR
 import time
+from contextlib import suppress
+import numpy as np
 
 def _new_rr_client_node():
     n = RR.RobotRaconteurNode()
@@ -17,6 +19,9 @@ class _client:
         self.rws_const = node.GetConstants("experimental.abb_robot.rws", client)
         self.task_cycle = self.rws_const["TaskCycle"]
         self.task_exec_state = self.rws_const["TaskExecutionState"]
+        self.egm_joint_command = node.GetStructureType("experimental.abb_robot.egm.EGMJointTarget", client)
+        self.egm_pose_command = node.GetStructureType("experimental.abb_robot.egm.EGMPoseTarget", client)
+        self.egm_path_corr_command = node.GetStructureType("experimental.abb_robot.egm.EGMPathCorrection", client)
 
     def __enter__(self):
         return self
@@ -61,6 +66,11 @@ def test_rws_controller_state():
 def test_rws_tasks():
     with _connect_client() as c_obj:
         c = c_obj.client
+
+        with suppress(Exception):
+            c.stop()
+            time.sleep(0.5)
+        c.setf_analog_io("mode", 0)
         c.resetpp()
         c.start(c_obj.task_cycle["forever"], ["T_ROB1"])
         time.sleep(0.1)
@@ -100,6 +110,9 @@ def test_rws_egm_feedback():
         assert robot_state_sns is not None
         assert robot_state_sns.data_header is not None
         assert len(robot_state_sns.robot_state.joint_position) == n_joints
+
+        egm_state, _ = c.egm_state.PeekInValue()
+        assert egm_state is not None
 
 def test_rws_isoch():
     with _connect_client() as c_obj:
@@ -190,3 +203,106 @@ def test_speed_ratio():
         assert c.speed_ratio == 0.5
         c.speed_ratio = 1.0
         assert c.speed_ratio == 1.0
+
+def test_egm_position_command():
+    with _connect_client() as c_obj:
+        c = c_obj.client
+
+        with suppress(Exception):
+            c.stop()
+            time.sleep(0.5)
+        c.setf_analog_io("mode", 1)
+        c.resetpp()
+        c.start(c_obj.task_cycle["once"], ["T_ROB1"])
+        time.sleep(2)
+        assert c.getf_execution_state().ctrlexecstate == c_obj.task_exec_state["running"]
+        cmd = c_obj.egm_joint_command()
+        cmd.joints = [21, -10, -20, 30, 40, 50]
+        cmd.external_joints = [90,100]
+        cmd.joints_speed = [10,10,10,10,10,10]
+        cmd.external_joints_speed = [10,10]
+        cmd.rapid_to_robot = [88,99]
+        c.egm_joint_command.PokeOutValue(cmd)
+        time.sleep(3)
+        cmd2 = c_obj.egm_joint_command()
+        cmd2.joints = cmd.joints
+        cmd2.joints_speed = [0,0,0,0,0,0]
+        c.egm_joint_command.PokeOutValue(cmd2)
+        time.sleep(2)
+        egm_state, _ = c.egm_state.PeekInValue()
+        np.testing.assert_allclose(egm_state.joint_position, cmd.joints, atol=0.1)
+        c.setf_digital_io("stop_egm", 1)
+        time.sleep(3)
+        assert c.getf_execution_state().ctrlexecstate == c_obj.task_exec_state["stopped"]
+
+def test_egm_pose_command():
+    with _connect_client() as c_obj:
+        c = c_obj.client
+
+        with suppress(Exception):
+            c.stop()
+            time.sleep(0.5)
+        c.setf_analog_io("mode", 2)
+        c.resetpp()
+        c.start(c_obj.task_cycle["once"], ["T_ROB1"])
+        time.sleep(2)
+        assert c.getf_execution_state().ctrlexecstate == c_obj.task_exec_state["running"]
+        cmd = c_obj.egm_pose_command()
+        cmd.cartesian[0]["position"]["x"] = 0.535
+        cmd.cartesian[0]["position"]["y"] = 0.181
+        cmd.cartesian[0]["position"]["z"] = 0.625
+        cmd.cartesian[0]["orientation"]["w"] = 0.704416
+        cmd.cartesian[0]["orientation"]["x"] = 0.1227878
+        cmd.cartesian[0]["orientation"]["y"] = 0.6963642
+        cmd.cartesian[0]["orientation"]["z"] = 0.0616284
+        cmd.external_joints = [90,100]
+        cmd.cartesian_speed.resize((1,))
+        cmd.cartesian_speed[0]["linear"]["x"] = 0.1
+        cmd.cartesian_speed[0]["linear"]["y"] = 0.11
+        cmd.cartesian_speed[0]["linear"]["z"] = 0.12
+        cmd.cartesian_speed[0]["angular"]["x"] = 0.13
+        cmd.cartesian_speed[0]["angular"]["y"] = 0.14
+        cmd.cartesian_speed[0]["angular"]["z"] = 0.15
+        cmd.external_joints_speed = [10,10]
+        cmd.rapid_to_robot = [82,93]
+        c.egm_pose_command.PokeOutValue(cmd)
+        time.sleep(3)
+        cmd2 = c_obj.egm_pose_command()
+        cmd2.cartesian = cmd.cartesian
+        c.egm_pose_command.PokeOutValue(cmd2)
+        time.sleep(2)
+        egm_state, _ = c.egm_state.PeekInValue()
+        np.testing.assert_allclose(c_obj.node.NamedArrayToArray(egm_state.cartesian_position), \
+                                    c_obj.node.NamedArrayToArray(cmd.cartesian), atol=0.1)
+        c.setf_digital_io("stop_egm", 1)
+        time.sleep(3)
+        assert c.getf_execution_state().ctrlexecstate == c_obj.task_exec_state["stopped"]
+
+def test_egm_path_corr():
+    with _connect_client() as c_obj:
+        c = c_obj.client
+
+        with suppress(Exception):
+            c.stop()
+            time.sleep(0.5)
+        c.setf_analog_io("mode", 3)
+        c.resetpp()
+        c.start(c_obj.task_cycle["once"], ["T_ROB1"])
+        time.sleep(2)
+        assert c.getf_execution_state().ctrlexecstate == c_obj.task_exec_state["running"]
+        cmd1 = c_obj.egm_path_corr_command()
+        cmd1.pos[0]["x"] = 0.1
+        cmd1.pos[0]["y"] = 0.2
+        cmd1.age = 1
+        cmd2 = c_obj.egm_path_corr_command()
+        cmd2.pos[0]["x"] = -0.1
+        cmd2.pos[0]["y"] = -0.2
+        cmd2.age = 1
+        for i in range(10):
+            c.egm_path_correction_command.PokeOutValue(cmd1)
+            time.sleep(0.5)
+            c.egm_path_correction_command.PokeOutValue(cmd2)
+            time.sleep(0.5)
+        time.sleep(0.1)
+        c.stop()
+

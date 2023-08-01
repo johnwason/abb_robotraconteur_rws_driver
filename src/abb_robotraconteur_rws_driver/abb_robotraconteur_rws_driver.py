@@ -48,6 +48,10 @@ class ABBRWSRobotImpl(AbstractRobot):
 
         self._confdata_dtype = self._node.GetNamedArrayDType("experimental.abb_robot.rws.ConfData")
 
+        self._egm_robot_type = self._node.GetStructureType("experimental.abb_robot.egm.EGMRobot")
+        self._egm_collision_info_type = self._node.GetStructureType("experimental.abb_robot.egm.EGMCollisionInfo")
+        # self._timespec2_dtype = self._node.GetNamedArrayDType("com.robotraconteur.datetime.TimeSpec2")
+
     def RRServiceObjectInit(self, context, service_path):
         super().RRServiceObjectInit(context, service_path)
 
@@ -55,6 +59,7 @@ class ABBRWSRobotImpl(AbstractRobot):
         self.egm_pose_command.InValueChanged += self._egm_pose_command_invalue_changed
         self.egm_path_correction_command.InValueChanged += self._egm_correction_command_invalue_changed
 
+        self._broadcast_downsampler.AddWireBroadcaster(self.egm_state)
 
 
     def _start_robot(self):
@@ -140,6 +145,9 @@ class ABBRWSRobotImpl(AbstractRobot):
             self._missed_egm += 1
 
         if robot_state is not None:
+
+            self._send_egm_state(robot_state)
+
             egm_last_recv = self._stopwatch_ellapsed_s()
             self._last_joint_state = egm_last_recv
             self._last_endpoint_state = egm_last_recv
@@ -160,6 +168,44 @@ class ABBRWSRobotImpl(AbstractRobot):
             self._ready = False
 
         super()._run_timestep(now)
+
+    def _send_egm_state(self, robot_state):
+
+        if not self._wires_ready:
+            return
+
+        s = self._egm_robot_type()
+        robot_message = robot_state.robot_message
+        if robot_message.HasField("header"):
+            s.seqno = robot_message.header.seqno
+            s.tm = robot_message.header.tm
+        if robot_state.joint_angles is not None:
+            s.joint_position = robot_state.joint_angles
+        if robot_state.cartesian is not None:
+            s.cartesian_position = self._node.ArrayToNamedArray(\
+                np.concatenate((robot_state.cartesian[1],robot_state.cartesian[0]*1e-3)), self._pose_dtype)
+        if robot_state.external_axes is not None:
+            s.external_joint_position = robot_state.external_axes
+        if robot_state.joint_angles_planned is not None:
+            s.joint_position_command = robot_state.joint_angles_planned
+        if robot_state.cartesian_planned is not None:
+            s.cartesian_position_command = self._node.ArrayToNamedArray(\
+                np.concatenate((robot_state.cartesian_planned[1],robot_state.cartesian_planned[0]*1e-3)), self._pose_dtype)
+        if robot_state.external_axes_planned is not None:
+            s.external_joint_position_command = robot_state.external_axes_planned
+        s.motor_state = robot_state.motors_on
+        s.rapid_ctrl_exec_state = robot_state.rapid_running
+        if robot_message.HasField("utilizationRate"):
+            s.utilization_rate = robot_message.utilizationRate
+        if robot_state.move_index is not None:
+            s.move_index = robot_state.move_index
+        if robot_state.rapid_from_robot is not None:
+            s.rapid_from_robot = robot_state.rapid_from_robot
+        if robot_message.HasField("measuredForce"):
+            s.measured_force = list(robot_message.measuredForce.force)
+
+        self.egm_state.OutValue = s
+        
 
     def getf_execution_state(self):
         state = self._rws.get_execution_state()
@@ -411,26 +457,55 @@ class ABBRWSRobotImpl(AbstractRobot):
 
     def _egm_joint_command_invalue_changed(self, value, ts, ep):
         try:
-            if self._command_mode == 6:
-                self._egm.send_to_robot(value.joints)
+            joint_command = value.joints
+            speed_command = value.joints_speed
+            if len(speed_command) == 0:
+                speed_command = None
+            external_joints = value.external_joints
+            if len(external_joints) == 0:
+                external_joints = None
+            external_joints_speed = value.external_joints_speed
+            if len(external_joints_speed) == 0:
+                external_joints_speed = None
+            rapid_to_robot = value.rapid_to_robot
+            if len(rapid_to_robot) == 0:
+                rapid_to_robot = None
+            self._egm.send_to_robot(joint_command, speed_command, external_joints, external_joints_speed, rapid_to_robot)
         except:
             traceback.print_exc()
 
     def _egm_pose_command_invalue_changed(self, value, ts, ep):
         # print(f"egm_pose_command: {value.cartesian}")
         try:
-            if self._command_mode == 6:
-                c = self._node.NamedArrayToArray(value.cartesian)[0]
-                self._egm.send_to_robot_cart(np.array(c[4:7])*1e3, c[0:4])
+            
+            cart_command = self._node.NamedArrayToArray(value.cartesian)[0]
+            speed_command = value.cartesian_speed
+            if len(speed_command) == 0:
+                speed_command = None
+            else:
+                speed_command1 = self._node.NamedArrayToArray(speed_command)
+                speed_command_lin = speed_command1[0][3:6]*1e3
+                speed_command_rot = speed_command1[0][0:3]
+                speed_command = np.concatenate((speed_command_lin, speed_command_rot))
+            external_joints = value.external_joints
+            if len(external_joints) == 0:
+                external_joints = None
+            external_joints_speed = value.external_joints_speed
+            if len(external_joints_speed) == 0:
+                external_joints_speed = None
+            rapid_to_robot = value.rapid_to_robot
+            if len(rapid_to_robot) == 0:
+                rapid_to_robot = None
+            self._egm.send_to_robot_cart(np.array(cart_command[4:7])*1e3, cart_command[0:4],
+                                         speed_command, external_joints, external_joints_speed, rapid_to_robot)
         except:
             traceback.print_exc()
 
     def _egm_correction_command_invalue_changed(self, value, ts, ep):
         # print(f"egm_correction_command: {value.pos}, {value.age}")
         try:
-            if self._command_mode == 6:
-                p = self._node.NamedArrayToArray(value.pos)[0]*1e3
-                self._egm.send_to_robot_path_corr(p, value.age)
+            p = self._node.NamedArrayToArray(value.pos)[0]*1e3
+            self._egm.send_to_robot_path_corr(p, value.age)
         except:
             traceback.print_exc()
 
@@ -444,7 +519,7 @@ def main():
     args, _ = parser.parse_known_args()
 
     RRC.RegisterStdRobDefServiceTypes(RRN)
-    register_service_types_from_resources(RRN, __package__, ["experimental.abb_robot.rws"])
+    register_service_types_from_resources(RRN, __package__, ["experimental.abb_robot.rws", "experimental.abb_robot.egm"])
 
     with args.robot_info_file:
         robot_info_text = args.robot_info_file.read()

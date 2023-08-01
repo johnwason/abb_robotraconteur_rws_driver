@@ -6,6 +6,7 @@ import com.robotraconteur.datetime
 import com.robotraconteur.geometry
 import com.robotraconteur.device.isoch
 import com.robotraconteur.device.clock
+import experimental.abb_robot.egm
 
 using com.robotraconteur.device.Device
 using com.robotraconteur.device.DeviceInfo
@@ -22,6 +23,10 @@ using com.robotraconteur.device.isoch.IsochDevice
 using com.robotraconteur.device.isoch.IsochInfo
 using com.robotraconteur.device.clock.DeviceClock
 using com.robotraconteur.device.clock.DeviceTime
+using experimental.abb_robot.egm.EGMJointTarget
+using experimental.abb_robot.egm.EGMPoseTarget
+using experimental.abb_robot.egm.EGMPathCorrection
+using experimental.abb_robot.egm.EGMRobot
 
 
 enum TaskCycle
@@ -88,28 +93,6 @@ struct RobTarget
     field Pose pose
     field ConfData robconf
     field double[6] extax
-end
-
-# TODO: duplicated in experimental.abb_robot.motion_program
-struct EGMJointTarget
-    field uint64 seqno
-    field uint64 state_seqno
-    field double[] joints
-    field double[] external_joints
-end
-
-struct EGMPoseTarget
-    field uint64 seqno
-    field uint64 state_seqno
-    field Pose cartesian
-    field double[] external_joints
-end
-
-struct EGMPathCorrection
-    field uint64 seqno
-    field uint64 state_seqno
-    field Point pos
-    field uint32 age
 end
 
 object ABBRWSRobot
@@ -181,6 +164,7 @@ object ABBRWSRobot
 
     property double speed_ratio
 
+    wire EGMRobot egm_state [readonly]
     wire EGMJointTarget egm_joint_command [writeonly]
     wire EGMPoseTarget egm_pose_command [writeonly]
     wire EGMPathCorrection egm_path_correction_command [writeonly]
